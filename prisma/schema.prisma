@@ -1,0 +1,523 @@
+// ==============================================================================
+// PRISMA SCHEMA - GERENCIA ODONTO (DENTISTA AUTÔNOMO + RECEPÇÃO)
+// Simples, direto e funcional para consultório individual
+// ==============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [uuidOssp(map: "uuid-ossp"), btreeGist(map: "btree_gist"), pgcrypto]
+}
+
+enum UserRole {
+  DENTIST      // Dentista Titular / Administrador
+  RECEPTIONIST // Recepção (Agenda, cadastro, financeiro balcão)
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  WAITING_ROOM
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum ToothSurface {
+  MESIAL
+  DISTAL
+  OCCLUSAL_INCISAL
+  VESTIBULAR
+  LINGUAL_PALATAL
+  GENERAL_TOOTH
+}
+
+enum DentalCondition {
+  HEALTHY
+  CARIES
+  RESTORATION_RESIN
+  RESTORATION_AMALGAM
+  CROWN
+  PROSTHESIS_FIXED
+  PROSTHESIS_REMOVABLE
+  ENDODONTIC_TREATED
+  ENDODONTIC_NEEDED
+  IMPLANT
+  MISSING_TOOTH
+  EXTRACTION_INDICATED
+  SEALANT
+  FRACTURE
+  EROSION
+}
+
+enum ConditionLayer {
+  INITIAL_STATE
+  TREATMENT_PLAN
+  COMPLETED
+}
+
+enum BudgetStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+enum LabOrderStatus {
+  SENT
+  IN_PRODUCTION
+  TRY_IN_STAGE
+  READY_FOR_CEMENTATION
+  COMPLETED
+  CANCELLED
+}
+
+enum AuditAction {
+  READ
+  CREATE
+  UPDATE
+  DELETE
+  SIGN
+}
+
+// ------------------------------------------------------------------------------
+// PERFIL DO CONSULTÓRIO / DENTISTA AUTÔNOMO
+// ------------------------------------------------------------------------------
+
+model ClinicProfile {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dentistName     String   @map("dentist_name") @db.VarChar(255)
+  croUf           String   @map("cro_uf") @db.VarChar(2)
+  croNumber       String   @map("cro_number") @db.VarChar(20)
+  cpfCnpj         String   @map("cpf_cnpj") @db.VarChar(14)
+  tradeName       String?  @map("trade_name") @db.VarChar(255)
+  phone           String   @db.VarChar(20)
+  whatsapp        String   @db.VarChar(20)
+  email           String   @db.VarChar(255)
+  address         Json     @default("{}")
+  settings        Json     @default("{\"currency\":\"BRL\",\"appointment_duration_default_min\":30,\"whatsapp_auto_reminder\":true,\"post_op_reminder_hours\":24}")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("clinic_profile")
+}
+
+model User {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String     @db.VarChar(255)
+  email        String     @unique @db.VarChar(255)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  role         UserRole
+  isActive     Boolean    @default(true) @map("is_active")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+// ------------------------------------------------------------------------------
+// PACIENTES & ALERTAS MÉDICOS
+// ------------------------------------------------------------------------------
+
+model Patient {
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName             String                @map("full_name") @db.VarChar(255)
+  cpf                  String                @unique @db.VarChar(11)
+  rg                   String?               @db.VarChar(20)
+  birthDate            DateTime              @map("birth_date") @db.Date
+  gender               String?               @db.VarChar(20)
+  phone                String                @db.VarChar(20)
+  whatsapp             String?               @db.VarChar(20)
+  email                String?               @db.VarChar(255)
+  address              Json                  @default("{}")
+  medicalAlerts        Json                  @default("{\"hypertension\":false,\"diabetes\":false,\"drug_allergies\":[],\"anticoagulant_use\":false}") @map("medical_alerts")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  appointments         Appointment[]
+  clinicalRecords      ClinicalRecord[]
+  odontograms          Odontogram[]
+  periodontograms      Periodontogram[]
+  budgets              Budget[]
+  prostheticWorkOrders ProstheticWorkOrder[]
+  images               ClinicalImage[]
+  cashbookTransactions CashbookTransaction[]
+  medicalConsents      MedicalConsent[]
+  paymentReceipts      PaymentReceipt[]
+  auditLogs            AuditLog[]
+
+  @@index([fullName])
+  @@index([cpf])
+  @@map("patients")
+}
+
+// ------------------------------------------------------------------------------
+// AGENDA DO CONSULTÓRIO (SEM ESCOLHA DE SALA/DENTISTA)
+// ------------------------------------------------------------------------------
+
+model Appointment {
+  id                         String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId                  String            @map("patient_id") @db.Uuid
+  startTime                  DateTime          @map("start_time") @db.Timestamptz
+  endTime                    DateTime          @map("end_time") @db.Timestamptz
+  status                     AppointmentStatus @default(SCHEDULED)
+  proceduresSummary          String?           @map("procedures_summary")
+  estimatedDurationMin       Int               @default(30) @map("estimated_duration_min")
+  notes                      String?
+  cancellationReason         String?           @map("cancellation_reason")
+  whatsappNotificationSentAt DateTime?         @map("whatsapp_notification_sent_at") @db.Timestamptz
+  createdAt                  DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                  DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  patient                    Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinicalRecords            ClinicalRecord[]
+
+  @@index([startTime])
+  @@map("appointments")
+}
+
+// ------------------------------------------------------------------------------
+// PRONTUÁRIO ELETRÔNICO IMUTÁVEL
+// ------------------------------------------------------------------------------
+
+model ClinicalRecord {
+  id                  String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId           String                   @map("patient_id") @db.Uuid
+  appointmentId       String?                  @map("appointment_id") @db.Uuid
+  recordType          String                   @map("record_type") @db.VarChar(50)
+  soapNotes           String                   @map("soap_notes")
+  sterilizationLotCode String?                 @map("sterilization_lot_code") @db.VarChar(50) // Rastreabilidade ANVISA RDC 15
+  isSigned            Boolean                  @default(false) @map("is_signed")
+  signedAt            DateTime?                @map("signed_at") @db.Timestamptz
+  signatureHashSha256 String?                  @map("signature_hash_sha256") @db.VarChar(64)
+  padesSignatureToken String?                  @map("pades_signature_token")
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz
+
+  patient             Patient                  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointment         Appointment?             @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  addenda             ClinicalRecordAddendum[]
+
+  @@map("clinical_records")
+}
+
+model ClinicalRecordAddendum {
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clinicalRecordId    String         @map("clinical_record_id") @db.Uuid
+  justification       String
+  addendumText        String         @map("addendum_text")
+  signedAt            DateTime       @default(now()) @map("signed_at") @db.Timestamptz
+  signatureHashSha256 String         @map("signature_hash_sha256") @db.VarChar(64)
+
+  clinicalRecord      ClinicalRecord @relation(fields: [clinicalRecordId], references: [id], onDelete: Restrict)
+
+  @@map("clinical_record_addenda")
+}
+
+// ------------------------------------------------------------------------------
+// ODONTOGRAMA (FDI ISO 3950 & 5 FACES)
+// ------------------------------------------------------------------------------
+
+model Odontogram {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId     String           @map("patient_id") @db.Uuid
+  versionNumber Int              @default(1) @map("version_number")
+  title         String           @default("Odontograma Geral") @db.VarChar(100)
+  notes         String?
+  isActive      Boolean          @default(true) @map("is_active")
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  patient       Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  items         OdontogramItem[]
+  budgets       Budget[]
+
+  @@unique([patientId, versionNumber])
+  @@map("odontograms")
+}
+
+model OdontogramItem {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  odontogramId       String          @map("odontogram_id") @db.Uuid
+  toothNumber        Int             @map("tooth_number")
+  surface            ToothSurface
+  condition          DentalCondition
+  layer              ConditionLayer
+  notes              String?
+  estimatedCostCents Int             @default(0) @map("estimated_cost_cents")
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  odontogram         Odontogram      @relation(fields: [odontogramId], references: [id], onDelete: Cascade)
+  budgetItems        BudgetItem[]
+
+  @@index([odontogramId, toothNumber, layer])
+  @@map("odontogram_items")
+}
+
+model Periodontogram {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId String   @map("patient_id") @db.Uuid
+  examDate  DateTime @default(now()) @map("exam_date") @db.Date
+  notes     String?
+  sitesData Json     @default("[]") @map("sites_data")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("periodontograms")
+}
+
+model ClinicalImage {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId   String   @map("patient_id") @db.Uuid
+  category    String   @db.VarChar(50)
+  s3Key       String   @map("s3_key") @db.VarChar(500)
+  mimeType    String   @map("mime_type") @db.VarChar(100)
+  description String?
+  takenAt     DateTime @default(now()) @map("taken_at") @db.Timestamptz
+
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("clinical_images")
+}
+
+// ------------------------------------------------------------------------------
+// ORÇAMENTOS E LIVRO CAIXA (CARNÊ-LEÃO / DMED)
+// ------------------------------------------------------------------------------
+
+model Budget {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId       String         @map("patient_id") @db.Uuid
+  odontogramId    String?        @map("odontogram_id") @db.Uuid
+  budgetNumber    Int            @default(autoincrement()) @map("budget_number")
+  status          BudgetStatus   @default(DRAFT)
+  grossTotalCents Int            @default(0) @map("gross_total_cents")
+  discountCents   Int            @default(0) @map("discount_cents")
+  netTotalCents   Int            @default(0) @map("net_total_cents")
+  validUntil      DateTime       @map("valid_until") @db.Date
+  approvedAt      DateTime?      @map("approved_at") @db.Timestamptz
+  notes           String?
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  patient         Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  odontogram      Odontogram?    @relation(fields: [odontogramId], references: [id], onDelete: SetNull)
+  items           BudgetItem[]
+  transactions    CashbookTransaction[]
+
+  @@map("budgets")
+}
+
+model BudgetItem {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  budgetId         String          @map("budget_id") @db.Uuid
+  odontogramItemId String?         @map("odontogram_item_id") @db.Uuid
+  procedureName    String          @map("procedure_name") @db.VarChar(255)
+  toothNumber      Int?            @map("tooth_number")
+  surface          ToothSurface?
+  quantity         Int             @default(1)
+  unitPriceCents   Int             @map("unit_price_cents")
+  finalPriceCents  Int             @map("final_price_cents")
+  isApproved       Boolean         @default(false) @map("is_approved")
+
+  budget           Budget          @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  odontogramItem   OdontogramItem? @relation(fields: [odontogramItemId], references: [id], onDelete: SetNull)
+
+  @@map("budget_items")
+}
+
+model CashbookTransaction {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  budgetId        String?  @map("budget_id") @db.Uuid
+  patientId       String?  @map("patient_id") @db.Uuid
+  type            String   @db.VarChar(10) // 'INCOME' ou 'EXPENSE'
+  category        String   @db.VarChar(100)
+  description     String
+  amountCents     Int      @map("amount_cents")
+  paymentMethod   String?  @map("payment_method") @db.VarChar(50)
+  transactionDate DateTime @default(now()) @map("transaction_date") @db.Date
+  dmedDeductible  Boolean  @default(true) @map("dmed_deductible")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  patient         Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  budget          Budget?  @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+
+  @@map("cashbook_transactions")
+}
+
+// ------------------------------------------------------------------------------
+// PROTÉTICOS (LABORATÓRIO EXTERNO)
+// ------------------------------------------------------------------------------
+
+model ProstheticWorkOrder {
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId          String         @map("patient_id") @db.Uuid
+  labName            String         @map("lab_name") @db.VarChar(255)
+  toothNumber        Int            @map("tooth_number")
+  vitaShade          String         @map("vita_shade") @db.VarChar(10)
+  materialType       String         @map("material_type") @db.VarChar(100)
+  workDescription    String         @map("work_description")
+  status             LabOrderStatus @default(SENT)
+  sentDate           DateTime       @default(now()) @map("sent_date") @db.Date
+  expectedTryInDate  DateTime?      @map("expected_try_in_date") @db.Date
+  finalDeliveryDate  DateTime?      @map("final_delivery_date") @db.Date
+  costCents          Int            @default(0) @map("cost_cents")
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  patient            Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("prosthetic_work_orders")
+}
+
+// ------------------------------------------------------------------------------
+// ESTOQUE DO CONSULTÓRIO
+// ------------------------------------------------------------------------------
+
+model InventoryItem {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String    @db.VarChar(255)
+  category       String    @db.VarChar(100)
+  unit           String    @db.VarChar(20)
+  minimumStock   Int       @default(2) @map("minimum_stock")
+  currentStock   Int       @default(0) @map("current_stock")
+  batchNumber    String?   @map("batch_number") @db.VarChar(100)
+  expirationDate DateTime? @map("expiration_date") @db.Date
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("inventory_items")
+}
+
+// ------------------------------------------------------------------------------
+// AUDITORIA LGPD
+// ------------------------------------------------------------------------------
+
+model AuditLog {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String?     @map("user_id") @db.Uuid
+  patientId    String?     @map("patient_id") @db.Uuid
+  action       AuditAction
+  resourceType String      @map("resource_type") @db.VarChar(100)
+  resourceId   String      @map("resource_id") @db.Uuid
+  ipAddress    String?     @map("ip_address")
+  details      Json?
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  patient      Patient?    @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([patientId])
+  @@map("audit_logs")
+}
+
+// ------------------------------------------------------------------------------
+// PAPERLESS: ASSINATURAS DIGITAIS E TCLE DINÂMICO
+// ------------------------------------------------------------------------------
+
+model SignatureRecord {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId       String?         @map("patient_id") @db.Uuid
+  signerName      String          @map("signer_name") @db.VarChar(255)
+  signerCpf       String          @map("signer_cpf") @db.VarChar(14)
+  signatureBase64 String          @map("signature_base64")
+  ipAddress       String?         @map("ip_address") @db.VarChar(45)
+  userAgent       String?         @map("user_agent")
+  consentFlag     Boolean         @default(true) @map("consent_flag")
+  documentType    String          @map("document_type") @db.VarChar(50) // 'TCLE', 'ANAMNESE', 'RECEIPT'
+  signedAt        DateTime        @default(now()) @map("signed_at") @db.Timestamptz
+
+  medicalConsents MedicalConsent[]
+
+  @@map("signature_records")
+}
+
+model MedicalConsent {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId          String           @map("patient_id") @db.Uuid
+  dentistName        String           @map("dentist_name") @db.VarChar(255)
+  dentistCro         String           @map("dentist_cro") @db.VarChar(20)
+  proceduresList     Json             @map("procedures_list") // Array com procedimentos e dentes
+  teethInvolved      Int[]            @map("teeth_involved")
+  riskClauses        String           @map("risk_clauses")
+  postOpInstructions String           @map("post_op_instructions")
+  signatureRecordId  String?          @map("signature_record_id") @db.Uuid
+  signedAt           DateTime?        @map("signed_at") @db.Timestamptz
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  patient            Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  signature          SignatureRecord? @relation(fields: [signatureRecordId], references: [id], onDelete: SetNull)
+
+  @@map("medical_consents")
+}
+
+// ------------------------------------------------------------------------------
+// BIOSSEGURANÇA & LIVRO DE AUTOCLAVE (ANVISA RDC 15)
+// ------------------------------------------------------------------------------
+
+model SterilizationCycle {
+  id                      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleNumber             String   @unique @map("cycle_number") @db.VarChar(50) // Ex: "CICLO-2026/001"
+  lotCode                 String   @unique @map("lot_code") @db.VarChar(50)     // Ex: "LOTE-2609-01"
+  cycleDate               DateTime @default(now()) @map("cycle_date") @db.Date
+  startTime               String   @map("start_time") @db.VarChar(10)
+  endTime                 String   @map("end_time") @db.VarChar(10)
+  operatorName            String   @map("operator_name") @db.VarChar(255)
+  equipmentName           String   @map("equipment_name") @db.VarChar(100)      // Ex: "Autoclave Cristófoli 21L"
+  temperatureCelsius      Decimal  @map("temperature_celsius") @db.Decimal(5, 1)
+  pressureBar             Decimal  @map("pressure_bar") @db.Decimal(4, 2)
+  sterilizationTimeMin    Int      @map("sterilization_time_min")
+  chemicalIndicatorStatus String   @map("chemical_indicator_status") @db.VarChar(20) // 'APPROVED', 'REJECTED'
+  biologicalTestStatus    String   @map("biological_test_status") @db.VarChar(20)    // 'PENDING', 'NEGATIVE', 'POSITIVE'
+  packagesDescription     String   @map("packages_description")
+  packagesCount           Int      @map("packages_count")
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("sterilization_cycles")
+}
+
+// ------------------------------------------------------------------------------
+// BALCÃO DE RECEBIMENTO, RECIBOS COM CRO & FECHAMENTO DIÁRIO
+// ------------------------------------------------------------------------------
+
+model PaymentReceipt {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  receiptNumber        String   @unique @map("receipt_number") @db.VarChar(50) // Ex: "REC-2026/0089"
+  patientId            String   @map("patient_id") @db.Uuid
+  payerName            String   @map("payer_name") @db.VarChar(255)
+  payerCpf             String   @map("payer_cpf") @db.VarChar(14)
+  description          String
+  grossAmountCents     Int      @map("gross_amount_cents")
+  netAmountCents       Int      @map("net_amount_cents")
+  cardFeePercentage    Decimal  @default(0.00) @map("card_fee_percentage") @db.Decimal(5, 2)
+  paymentMethod        String   @map("payment_method") @db.VarChar(50)
+  dentistName          String   @map("dentist_name") @db.VarChar(255)
+  dentistCro           String   @map("dentist_cro") @db.VarChar(20)
+  receiptTextSpelledOut String  @map("receipt_text_spelled_out")
+  issuedAt             DateTime @default(now()) @map("issued_at") @db.Timestamptz
+
+  patient              Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("payment_receipts")
+}
+
+model CashRegisterClosing {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  closingDate           DateTime @default(now()) @map("closing_date") @db.Date
+  cashInDrawerCents     Int      @default(0) @map("cash_in_drawer_cents")
+  pixTotalCents         Int      @default(0) @map("pix_total_cents")
+  debitCardGrossCents   Int      @default(0) @map("debit_card_gross_cents")
+  debitCardNetCents     Int      @default(0) @map("debit_card_net_cents")
+  creditCardGrossCents  Int      @default(0) @map("credit_card_gross_cents")
+  creditCardNetCents    Int      @default(0) @map("credit_card_net_cents")
+  totalGrossCents       Int      @default(0) @map("total_gross_cents")
+  totalNetCents         Int      @default(0) @map("total_net_cents")
+  notes                 String?
+  closedByUserName      String   @map("closed_by_user_name") @db.VarChar(255)
+  closedAt              DateTime @default(now()) @map("closed_at") @db.Timestamptz
+
+  @@map("cash_register_closings")
+}

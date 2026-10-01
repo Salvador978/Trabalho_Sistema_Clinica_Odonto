@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#grad)"/>
+  <!-- Dente estilizado em vetor branco -->
+  <path d="M256 100 C190 100 140 140 140 210 C140 270 170 330 190 390 C200 420 220 420 230 380 C240 340 245 320 256 320 C267 320 272 340 282 380 C292 420 312 420 322 390 C342 330 372 270 372 210 C372 140 322 100 256 100 Z" fill="#ffffff"/>
+  <circle cx="210" cy="180" r="16" fill="#3b82f6" opacity="0.4"/>
+  <circle cx="302" cy="180" r="16" fill="#3b82f6" opacity="0.4"/>
+</svg>

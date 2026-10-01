@@ -1,0 +1,299 @@
+openapi: 3.0.3
+info:
+  title: Gerencia Odonto - Core Clinical & Scheduling API
+  description: >
+    API RESTful de alta disponibilidade para clínica odontológica dedicada.
+    Em conformidade com LGPD, resoluções CFM/CFO e notação dentária FDI (ISO 3950).
+  version: 1.0.0
+servers:
+  - url: https://api.gerenciaodonto.com.br/v1
+    description: Produção
+  - url: https://sandbox-api.gerenciaodonto.com.br/v1
+    description: Homologação / Sandbox
+
+paths:
+  /appointments:
+    post:
+      summary: Criação de agendamento com validação estrita anti-conflito
+      description: >
+        Garante a integridade temporal impedindo que o dentista ou a cadeira/sala clínica
+        possuam duas consultas simultâneas na clínica.
+      operationId: createAppointment
+      tags:
+        - Agenda
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAppointmentDTO'
+      responses:
+        '201':
+          description: Agendamento criado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Appointment'
+        '409':
+          description: Conflito de agenda (Dentista ou Sala indisponível no horário solicitado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentConflictErrorResponse'
+
+  /appointments/{id}/status:
+    patch:
+      summary: Transição da máquina de estados do agendamento
+      description: >
+        Valida a matriz de transições permitidas (SCHEDULED -> CONFIRMED -> WAITING_ROOM -> IN_PROGRESS -> COMPLETED).
+        Dispara webhook para automação de mensagens de confirmação e pós-operatório.
+      operationId: updateAppointmentStatus
+      tags:
+        - Agenda
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAppointmentStatusDTO'
+      responses:
+        '200':
+          description: Status atualizado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Appointment'
+        '422':
+          description: Transição de estado inválida
+
+  /patients/{patientId}/odontogram:
+    get:
+      summary: Recupera o odontograma ativo do paciente
+      description: Retorna o odontograma na versão atual, com dupla camada (Estado Inicial e Plano de Tratamento).
+      operationId: getActiveOdontogram
+      tags:
+        - Odontograma
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Dados estruturados do odontograma
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OdontogramFullResponse'
+
+  /patients/{patientId}/odontogram/versions:
+    post:
+      summary: Salva uma nova versão do odontograma com snapshot imutável
+      description: >
+        Registra uma nova versão preservando o histórico clínico anterior. Opcionalmente
+        gera rascunho de orçamento com os procedimentos propostos. Registra evento no Audit Log LGPD.
+      operationId: createOdontogramVersion
+      tags:
+        - Odontograma
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveOdontogramVersionDTO'
+      responses:
+        '201':
+          description: Nova versão do odontograma salva com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OdontogramFullResponse'
+
+components:
+  schemas:
+    CreateAppointmentDTO:
+      type: object
+      required:
+        - patientId
+        - startTime
+        - estimatedDurationMin
+      properties:
+        patientId:
+          type: string
+          format: uuid
+        startTime:
+          type: string
+          format: date-time
+        estimatedDurationMin:
+          type: integer
+          enum: [15, 30, 45, 60, 90, 120]
+          example: 30
+        proceduresSummary:
+          type: string
+        notes:
+          type: string
+        triggerWhatsappConfirmation:
+          type: boolean
+          default: true
+
+    UpdateAppointmentStatusDTO:
+      type: object
+      required:
+        - newStatus
+      properties:
+        newStatus:
+          type: string
+          enum: [SCHEDULED, CONFIRMED, WAITING_ROOM, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW]
+        cancellationReason:
+          type: string
+        notes:
+          type: string
+
+    Appointment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        patientId:
+          type: string
+          format: uuid
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [SCHEDULED, CONFIRMED, WAITING_ROOM, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW]
+        estimatedDurationMin:
+          type: integer
+        proceduresSummary:
+          type: string
+
+    AppointmentConflictErrorResponse:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          example: 409
+        error:
+          type: string
+          example: Conflict
+        message:
+          type: string
+          example: Conflito de horário detectado na agenda do consultório.
+        conflictDetails:
+          type: object
+          properties:
+            conflictingAppointmentId:
+              type: string
+              format: uuid
+            patientName:
+              type: string
+            conflictingTimeRange:
+              type: object
+              properties:
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+            conflictingAppointmentId:
+              type: string
+              format: uuid
+
+    SaveOdontogramFindingDTO:
+      type: object
+      required:
+        - toothNumber
+        - surface
+        - condition
+        - layer
+      properties:
+        toothNumber:
+          type: integer
+          description: Número FDI ISO 3950 (11-48 ou 51-85)
+          example: 16
+        surface:
+          type: string
+          enum: [MESIAL, DISTAL, OCCLUSAL_INCISAL, VESTIBULAR, LINGUAL_PALATAL, GENERAL_TOOTH]
+        condition:
+          type: string
+          enum: [HEALTHY, CARIES, RESTORATION_RESIN, RESTORATION_AMALGAM, CROWN, PROSTHESIS_FIXED, PROSTHESIS_REMOVABLE, ENDODONTIC_TREATED, ENDODONTIC_NEEDED, IMPLANT, MISSING_TOOTH, EXTRACTION_INDICATED, SEALANT, FRACTURE, EROSION]
+        layer:
+          type: string
+          enum: [INITIAL_STATE, TREATMENT_PLAN, COMPLETED]
+        notes:
+          type: string
+        estimatedCostCents:
+          type: integer
+          example: 25000
+
+    SaveOdontogramVersionDTO:
+      type: object
+      required:
+        - patientId
+        - title
+        - findings
+      properties:
+        patientId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: "Avaliação Inicial + Planejamento"
+        notes:
+          type: string
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaveOdontogramFindingDTO'
+        generateBudgetDraft:
+          type: boolean
+          default: false
+
+    OdontogramFullResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        patientId:
+          type: string
+          format: uuid
+        patientName:
+          type: string
+        versionNumber:
+          type: integer
+        title:
+          type: string
+        notes:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SaveOdontogramFindingDTO'
